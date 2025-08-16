@@ -1,0 +1,31 @@
+.board {
+  display: grid;
+  gap: 0;
+  border: 2px solid #4B5563;
+  padding: 0.5rem;
+  width: 70%;
+  aspect-ratio: 1 / 1;
+}
+
+.tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+.light {
+  background-color: #D1D5DB;
+}
+
+.dark {
+  background-color: #4B5563;
+}
+
+.piece {
+  width: 85%;
+  height: 85%;
+  object-fit: contain;
+}
