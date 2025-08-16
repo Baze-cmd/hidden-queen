@@ -20,7 +20,7 @@ export function BoardComponent(props: { board: Board }) {
     ['ci', 'circle.svg']
   ]);
 
-  const possibleTileValues: String[] = ['wK', 'wQ', 'wR', 'wB', 'wN', 'wP', 'wH', 'bK', 'bQ', 'bR', 'bB', 'bN', 'bP', 'bH', 'ci'];
+  const possibleTileValues: string[] = ['wK', 'wQ', 'wR', 'wB', 'wN', 'wP', 'wH', 'bK', 'bQ', 'bR', 'bB', 'bN', 'bP', 'bH', 'ci'];
 
   function getChessPiece(piece: string) {
     if(!possibleTileValues.includes(piece))
