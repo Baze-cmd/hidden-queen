@@ -1,13 +1,43 @@
-import { t } from '@/app/server/trpc';
+import { t, ee } from '@/app/server/trpc';
 import { Game } from '@/types/Game';
 import { InitBoard } from '@/app/InitBoard';
 import { z } from 'zod';
 import { Board } from '@/types/Board';
 import { games, isInQueue } from '../gameStore';
 import { allPlayers } from '../playerStore';
+import { observable } from '@trpc/server/observable';
 
 const gameTime: number = 300; // 5 minutes
 const gameTimeIncrement: number = 50; // 5 seconds
+
+function getPlayersInQueue() {
+    const playersByPublicGameId: Map<string, { name: string; rating: number }> = new Map();
+
+    for (const [gameId, game] of games.entries()) {
+        if (game.isPrivate) continue;
+
+        let numOfPlayers = 0;
+        if (game.blackPlayerId) numOfPlayers += 1;
+        if (game.whitePlayerId) numOfPlayers += 1;
+        if (numOfPlayers === 0 || numOfPlayers === 2) continue;
+
+        let singlePlayerId: string | null = null;
+        if (game.blackPlayerId && !game.whitePlayerId) {
+            singlePlayerId = game.blackPlayerId;
+        } else if (!game.blackPlayerId && game.whitePlayerId) {
+            singlePlayerId = game.whitePlayerId;
+        }
+
+        if (singlePlayerId) {
+            const player = allPlayers.get(singlePlayerId);
+            if (player) {
+                playersByPublicGameId.set(gameId, { name: player.name, rating: player.rating });
+            }
+        }
+    }
+
+    return Array.from(playersByPublicGameId.entries());
+}
 
 function createGame(isPrivate: boolean, playerId: string): string | null {
     if (isInQueue.has(playerId)) {
@@ -39,7 +69,25 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
 
     games.set(id, game);
     isInQueue.add(playerId);
+
+    // Publish event when a player joins the queue
+    ee.emit('queueUpdate');
+
     return id;
+}
+
+function maskHiddenQueen(board: Board, playerId: string, game: Game): Board {
+    const tiles = board.tiles.map((tile) => {
+        if (tile === 'wH' && game.whitePlayerId !== playerId) {
+            return 'wP'; // hide white queen from non-white player
+        }
+        if (tile === 'bH' && game.blackPlayerId !== playerId) {
+            return 'bP'; // hide black queen from non-black player
+        }
+        return tile;
+    });
+
+    return { ...board, tiles };
 }
 
 export const gamesRouter = t.router({
@@ -78,6 +126,12 @@ export const gamesRouter = t.router({
             if (game.blackPlayerId) {
                 isInQueue.delete(game.blackPlayerId);
             }
+
+            // Publish event when a player joins a game
+            ee.emit('queueUpdate');
+            // Notify clients of the board state change
+            ee.emit('boardUpdate', game.id);
+
             return true;
         }),
 
@@ -85,10 +139,16 @@ export const gamesRouter = t.router({
         for (const [gameId, game] of games.entries()) {
             if (game.whitePlayerId == req.input || game.blackPlayerId == req.input) {
                 games.delete(gameId);
+                // Also notify clients that the game has ended
+                ee.emit('boardUpdate', gameId);
                 break;
             }
         }
         isInQueue.delete(req.input);
+
+        // Publish event when a player leaves the queue/game
+        ee.emit('queueUpdate');
+
         return true;
     }),
 
@@ -96,34 +156,57 @@ export const gamesRouter = t.router({
         return isInQueue.has(req.input);
     }),
 
-    getPlayersByPublicGameId: t.procedure.query(() => {
-        const playersByPublicGameId: Map<string, { name: string; rating: number }> = new Map();
+    // New subscription procedure for real-time updates of the public queue
+    getPlayersInPublicQueue: t.procedure.subscription(() => {
+        return observable<ReturnType<typeof getPlayersInQueue>>((emit) => {
+            const onQueueUpdate = () => {
+                emit.next(getPlayersInQueue());
+            };
+            ee.on('queueUpdate', onQueueUpdate);
 
-        for (const [gameId, game] of games.entries()) {
-            if (game.isPrivate) continue;
+            // Initial emit of the current state
+            onQueueUpdate();
 
-            let numOfPlayers = 0;
-            if (game.blackPlayerId) numOfPlayers += 1;
-            if (game.whitePlayerId) numOfPlayers += 1;
-            if (numOfPlayers === 0 || numOfPlayers === 2) continue;
-
-            let singlePlayerId: string | null = null;
-            if (game.blackPlayerId && !game.whitePlayerId) {
-                singlePlayerId = game.blackPlayerId;
-            } else if (!game.blackPlayerId && game.whitePlayerId) {
-                singlePlayerId = game.whitePlayerId;
-            }
-
-            if (singlePlayerId) {
-                const player = allPlayers.get(singlePlayerId);
-                if (player) {
-                    playersByPublicGameId.set(gameId, { name: player.name, rating: player.rating });
-                }
-            }
-        }
-
-        return Array.from(playersByPublicGameId.entries());
+            return () => {
+                ee.off('queueUpdate', onQueueUpdate);
+            };
+        });
     }),
+
+    // New subscription procedure for real-time board updates for a specific game
+    onBoardUpdate: t.procedure
+        .input(
+            z.object({
+                gameId: z.string(),
+                playerId: z.string(),
+            })
+        )
+        .subscription((req) => {
+            const { gameId: subscriptionGameId, playerId } = req.input;
+
+            return observable<Board>((emit) => {
+                const onBoardUpdate = (gameId: string) => {
+                    if (gameId === subscriptionGameId) {
+                        const game = games.get(gameId);
+                        if (game) {
+                            emit.next(maskHiddenQueen(game.board, playerId, game));
+                        }
+                    }
+                };
+
+                ee.on('boardUpdate', onBoardUpdate);
+
+                // Send initial board
+                const game = games.get(subscriptionGameId);
+                if (game) {
+                    emit.next(maskHiddenQueen(game.board, playerId, game));
+                }
+
+                return () => {
+                    ee.off('boardUpdate', onBoardUpdate);
+                };
+            });
+        }),
 
     getGameBoardStateForGameWithId: t.procedure.input(z.string()).query((req): Board => {
         const game = games.get(req.input);
@@ -185,12 +268,16 @@ export const gamesRouter = t.router({
         }),
 
     selectHiddenQueen: t.procedure
-        .input(z.object({ gameId: z.string(), playerId: z.string, x: z.number(), y: z.number() }))
+        .input(z.object({ gameId: z.string(), playerId: z.string(), x: z.number(), y: z.number() }))
         .mutation((req): boolean => {
             const { gameId, playerId, x, y } = req.input;
             const game = games.get(gameId);
             if (!game) {
                 throw new Error(`No game found with id ${req.input}`);
+            }
+
+            if (game.isStarted) {
+                return false;
             }
 
             if (playerId !== game.whitePlayerId && playerId !== game.blackPlayerId) {
@@ -211,7 +298,18 @@ export const gamesRouter = t.router({
             }
 
             const hiddenQueen = isWhitePlayer ? 'wH' : 'bH';
+
+            game.board.tiles = game.board.tiles.map((tile) => {
+                if (isWhitePlayer && tile == 'wH') return 'wP';
+                if (!isWhitePlayer && tile == 'bH') return 'bP';
+                return tile;
+            });
+
             game.board.tiles[tileIndex] = hiddenQueen;
+
+            // Notify all subscribed clients that the board has been updated
+            ee.emit('boardUpdate', gameId);
+
             return true;
         }),
 });

@@ -6,11 +6,12 @@ import { CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Users, LoaderIcon } from 'lucide-react';
 import { usePlayer } from '@/app/providers';
 import { useRouter } from 'next/navigation';
-import { join } from 'path';
 
 export const QueueList = () => {
-    const { data, isLoading } = trpc.games.getPlayersByPublicGameId.useQuery();
-    const playersByPublicGameId = new Map(data);
+    // Change useQuery to useSubscription for real-time updates
+    const { data: playersData } = trpc.games.getPlayersInPublicQueue.useSubscription();
+    const playersByPublicGameId = new Map(playersData || []);
+
     const createPrivateGameMutation = trpc.games.createPrivateGame.useMutation();
     const createPublicGameMutation = trpc.games.createPublicGame.useMutation();
     const joinGameMutation = trpc.games.joinGame.useMutation();
@@ -23,7 +24,7 @@ export const QueueList = () => {
     const { data: isPlayerInQueue, isLoading: isQueueStatusLoading } =
         trpc.games.isInQueue.useQuery(playerId || '', { enabled: !!playerId });
 
-    if (isLoading || isPlayerLoading || isQueueStatusLoading)
+    if (isPlayerLoading || isQueueStatusLoading)
         return <LoaderIcon className={`${styles.spinner} animate-spin`} />;
 
     function createPrivateGameButton() {
@@ -52,22 +53,17 @@ export const QueueList = () => {
         try {
             if (isPlayerInQueue) {
                 await leaveGameMutation.mutateAsync(playerId);
-                await utils.games.isInQueue.invalidate();
-                await utils.games.getPlayersByPublicGameId.invalidate();
+                // No need to manually invalidate, subscription handles it
             } else {
                 const gameId = await createPublicGameMutation.mutateAsync(playerId);
                 if (gameId) {
                     router.push(`/game/${gameId}`);
-                } else {
-                    await utils.games.isInQueue.invalidate();
-                    await utils.games.getPlayersByPublicGameId.invalidate();
                 }
             }
         } catch (error) {
             console.error('Failed to toggle queue:', error);
-            await utils.games.isInQueue.invalidate();
-            await utils.games.getPlayersByPublicGameId.invalidate();
         }
+        await utils.games.isInQueue.invalidate();
     }
 
     function joinGame(gameId: string) {

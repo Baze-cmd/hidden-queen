@@ -1,7 +1,11 @@
 import { Board } from '@/types/Board';
 import styles from './BoardComponent.module.css';
 
-export function BoardComponent(props: { board: Board; whitePOV: boolean }) {
+export function BoardComponent(props: {
+    board: Board;
+    whitePOV: boolean;
+    onTileClick: (x: number, y: number) => void;
+}) {
     const fileMapping = new Map<string, string>([
         ['wK', 'w_k.svg'],
         ['wQ', 'w_q.svg'],
@@ -73,6 +77,7 @@ export function BoardComponent(props: { board: Board; whitePOV: boolean }) {
                         <div
                             key={`${rowIndex}-${colIndex}`}
                             className={`${styles.tile} ${isLight ? styles.light : styles.dark}`}
+                            onClick={() => props.onTileClick(displayColIndex, displayRowIndex)}
                         >
                             {getChessPiece(piece)}
                         </div>
