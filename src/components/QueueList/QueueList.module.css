@@ -78,3 +78,22 @@
 .joinGameButton:hover {
   background-color: #15803d;
 }
+
+.cardTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: white;
+}
+
+.iconYellow {
+  width: 2rem;
+  height: 2rem;
+  color: #FACC15;
+}
+
+.spinner {
+  position: relative;
+  top: 50%;
+  left: 50%;
+}
