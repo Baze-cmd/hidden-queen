@@ -58,7 +58,6 @@ export function BoardComponent(props: {
         >
             {Array.from({ length: props.board.height }).map((_, rowIndex) =>
                 Array.from({ length: props.board.width }).map((_, colIndex) => {
-                    // For black POV, flip both row and column indices
                     const displayRowIndex = props.whitePOV
                         ? rowIndex
                         : props.board.height - 1 - rowIndex;
@@ -66,11 +65,9 @@ export function BoardComponent(props: {
                         ? colIndex
                         : props.board.width - 1 - colIndex;
 
-                    // Use the original indices for tile data lookup
                     const idx = displayRowIndex * props.board.width + displayColIndex;
                     const piece = props.board.tiles[idx] || '';
 
-                    // Calculate tile color based on display position (not flipped for black POV)
                     const isLight = (rowIndex + colIndex) % 2 === 0;
 
                     return (

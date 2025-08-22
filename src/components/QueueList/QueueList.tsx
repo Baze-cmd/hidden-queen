@@ -8,7 +8,6 @@ import { usePlayer } from '@/app/providers';
 import { useRouter } from 'next/navigation';
 
 export const QueueList = () => {
-    // Change useQuery to useSubscription for real-time updates
     const { data: playersData } = trpc.games.getPlayersInPublicQueue.useSubscription();
     const playersByPublicGameId = new Map(playersData || []);
 
@@ -53,7 +52,6 @@ export const QueueList = () => {
         try {
             if (isPlayerInQueue) {
                 await leaveGameMutation.mutateAsync(playerId);
-                // No need to manually invalidate, subscription handles it
             } else {
                 const gameId = await createPublicGameMutation.mutateAsync(playerId);
                 if (gameId) {

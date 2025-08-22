@@ -22,18 +22,16 @@ export function Providers({ children }: { children: React.ReactNode }) {
     const [trpcClient] = useState(() =>
         trpc.createClient({
             links: [
-                // adds pretty logs to your console in development and logs errors in production
                 loggerLink(),
                 splitLink({
-                    // uses the httpSubscriptionLink for subscriptions
                     condition: (op) => op.type === 'subscription',
                     true: httpSubscriptionLink({
                         url: `/api/trpc`,
-                        transformer: SuperJSON, // Add this line
+                        transformer: SuperJSON,
                     }),
                     false: httpBatchLink({
                         url: `/api/trpc`,
-                        transformer: SuperJSON, // Add this line
+                        transformer: SuperJSON,
                     }),
                 }),
             ],

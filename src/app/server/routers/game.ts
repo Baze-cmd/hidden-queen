@@ -6,6 +6,7 @@ import { Board } from '@/types/Board';
 import { games, isInQueue } from '../gameStore';
 import { allPlayers } from '../playerStore';
 import { observable } from '@trpc/server/observable';
+import { pieceMovementHandler } from '@/core/PieceMovement';
 
 const gameTime: number = 300; // 5 minutes
 const gameTimeIncrement: number = 50; // 5 seconds
@@ -70,7 +71,6 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
     games.set(id, game);
     isInQueue.add(playerId);
 
-    // Publish event when a player joins the queue
     ee.emit('queueUpdate');
 
     return id;
@@ -79,10 +79,10 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
 function maskHiddenQueen(board: Board, playerId: string, game: Game): Board {
     const tiles = board.tiles.map((tile) => {
         if (tile === 'wH' && game.whitePlayerId !== playerId) {
-            return 'wP'; // hide white queen from non-white player
+            return 'wP';
         }
         if (tile === 'bH' && game.blackPlayerId !== playerId) {
-            return 'bP'; // hide black queen from non-black player
+            return 'bP';
         }
         return tile;
     });
@@ -106,7 +106,12 @@ export const gamesRouter = t.router({
             if (!game) {
                 return false;
             }
-
+            if (
+                game.whitePlayerId === req.input.playerId ||
+                game.blackPlayerId === req.input.playerId
+            ) {
+                return false;
+            }
             const player = allPlayers.get(req.input.playerId);
             if (!player) {
                 return false;
@@ -127,10 +132,9 @@ export const gamesRouter = t.router({
                 isInQueue.delete(game.blackPlayerId);
             }
 
-            // Publish event when a player joins a game
             ee.emit('queueUpdate');
-            // Notify clients of the board state change
             ee.emit('boardUpdate', game.id);
+            ee.emit('opponentJoinedGame', game.id);
 
             return true;
         }),
@@ -139,14 +143,12 @@ export const gamesRouter = t.router({
         for (const [gameId, game] of games.entries()) {
             if (game.whitePlayerId == req.input || game.blackPlayerId == req.input) {
                 games.delete(gameId);
-                // Also notify clients that the game has ended
                 ee.emit('boardUpdate', gameId);
                 break;
             }
         }
         isInQueue.delete(req.input);
 
-        // Publish event when a player leaves the queue/game
         ee.emit('queueUpdate');
 
         return true;
@@ -156,7 +158,6 @@ export const gamesRouter = t.router({
         return isInQueue.has(req.input);
     }),
 
-    // New subscription procedure for real-time updates of the public queue
     getPlayersInPublicQueue: t.procedure.subscription(() => {
         return observable<ReturnType<typeof getPlayersInQueue>>((emit) => {
             const onQueueUpdate = () => {
@@ -164,7 +165,6 @@ export const gamesRouter = t.router({
             };
             ee.on('queueUpdate', onQueueUpdate);
 
-            // Initial emit of the current state
             onQueueUpdate();
 
             return () => {
@@ -173,7 +173,6 @@ export const gamesRouter = t.router({
         });
     }),
 
-    // New subscription procedure for real-time board updates for a specific game
     onBoardUpdate: t.procedure
         .input(
             z.object({
@@ -189,6 +188,9 @@ export const gamesRouter = t.router({
                     if (gameId === subscriptionGameId) {
                         const game = games.get(gameId);
                         if (game) {
+                            console.log(
+                                `Emitting board update for game ${gameId} to player ${playerId}`
+                            );
                             emit.next(maskHiddenQueen(game.board, playerId, game));
                         }
                     }
@@ -196,7 +198,6 @@ export const gamesRouter = t.router({
 
                 ee.on('boardUpdate', onBoardUpdate);
 
-                // Send initial board
                 const game = games.get(subscriptionGameId);
                 if (game) {
                     emit.next(maskHiddenQueen(game.board, playerId, game));
@@ -208,54 +209,16 @@ export const gamesRouter = t.router({
             });
         }),
 
-    getGameBoardStateForGameWithId: t.procedure.input(z.string()).query((req): Board => {
-        const game = games.get(req.input);
-        if (!game) {
-            throw new Error(`No game found with id ${req.input}`);
-        }
-        const board = game.board;
-        return board;
-    }),
-
-    getGameInfo: t.procedure.input(z.string()).query(
-        (
-            req
-        ): {
-            whitePlayer: { name: string; rating: number } | null;
-            blackPlayer: { name: string; rating: number } | null;
-            isStarted: boolean;
-            whiteTimeLeft: number;
-            blackTimeLeft: number;
-            isWhiteTurn: boolean;
-        } => {
-            const game = games.get(req.input);
+    getGameBoardStateForGameWithId: t.procedure
+        .input(z.object({ gameId: z.string(), playerId: z.string() }))
+        .query((req): Board => {
+            const game = games.get(req.input.gameId);
+            const playerId = req.input.playerId;
             if (!game) {
-                throw new Error(`No game found with id ${req.input}`);
+                throw new Error(`No game found with id ${req.input.gameId}`);
             }
-
-            const whitePlayer = game.whitePlayerId ? allPlayers.get(game.whitePlayerId) : null;
-            const blackPlayer = game.blackPlayerId ? allPlayers.get(game.blackPlayerId) : null;
-
-            return {
-                whitePlayer: whitePlayer
-                    ? {
-                          name: whitePlayer.name,
-                          rating: whitePlayer.rating,
-                      }
-                    : null,
-                blackPlayer: blackPlayer
-                    ? {
-                          name: blackPlayer.name,
-                          rating: blackPlayer.rating,
-                      }
-                    : null,
-                isStarted: game.isStarted,
-                whiteTimeLeft: game.whiteTimeLeft,
-                blackTimeLeft: game.blackTimeLeft,
-                isWhiteTurn: game.isWhiteTurn,
-            };
-        }
-    ),
+            return maskHiddenQueen(game.board, playerId, game);
+        }),
 
     isWhite: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string() }))
@@ -267,13 +230,37 @@ export const gamesRouter = t.router({
             return game.whitePlayerId === req.input.playerId;
         }),
 
+    getOpponentInfo: t.procedure
+        .input(z.object({ gameId: z.string(), playerId: z.string() }))
+        .query((req) => {
+            const gameId = req.input.gameId;
+            const playerId = req.input.playerId;
+            const game = games.get(gameId);
+            if (!game) {
+                throw new Error(`No game found with id ${gameId}`);
+            }
+            const whitePlayerId = game.whitePlayerId;
+            const blackPlayerId = game.blackPlayerId;
+            let player = null;
+            if (whitePlayerId == playerId) {
+                player = allPlayers.get(blackPlayerId!);
+            } else if (blackPlayerId == playerId) {
+                player = allPlayers.get(whitePlayerId!);
+            } else {
+                throw new Error('No opponent found');
+            }
+            if (player) {
+                return { name: player.name, rating: player.rating };
+            }
+        }),
+
     selectHiddenQueen: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string(), x: z.number(), y: z.number() }))
         .mutation((req): boolean => {
             const { gameId, playerId, x, y } = req.input;
             const game = games.get(gameId);
             if (!game) {
-                throw new Error(`No game found with id ${req.input}`);
+                throw new Error(`No game found with id ${gameId}`);
             }
 
             if (game.isStarted) {
@@ -281,6 +268,7 @@ export const gamesRouter = t.router({
             }
 
             if (playerId !== game.whitePlayerId && playerId !== game.blackPlayerId) {
+                console.log(`${playerId} - ${game.whitePlayerId} - ${game.blackPlayerId}`);
                 throw new Error(`No player found in this game ${playerId}`);
             }
 
@@ -307,9 +295,146 @@ export const gamesRouter = t.router({
 
             game.board.tiles[tileIndex] = hiddenQueen;
 
-            // Notify all subscribed clients that the board has been updated
+            let numHiddenQueens = 0;
+            for (const tile of game.board.tiles) {
+                if (tile === 'wH') {
+                    numHiddenQueens += 1;
+                }
+                if (tile === 'bH') {
+                    numHiddenQueens += 1;
+                }
+            }
+
+            if (numHiddenQueens == 2) {
+                game.isStarted = true;
+                game.isWhiteTurn = true;
+                ee.emit('gameStartedUpdate', gameId);
+            }
+
             ee.emit('boardUpdate', gameId);
 
-            return true;
+            return game.isStarted;
         }),
+
+    opponentJoinedGame: t.procedure.input(z.string()).subscription((req) => {
+        const subscriptionGameId = req.input;
+        return observable<boolean>((emit) => {
+            const onOpponentJoined = (gameId: string) => {
+                if (gameId == subscriptionGameId) {
+                    emit.next(true);
+                }
+            };
+            ee.on('opponentJoinedGame', onOpponentJoined);
+            return () => {
+                ee.off('opponentJoinedGame', onOpponentJoined);
+            };
+        });
+    }),
+
+    gameStartedUpdate: t.procedure.input(z.string()).subscription((req) => {
+        const subscriptionGameId = req.input;
+        return observable<boolean>((emit) => {
+            const onGameStart = (gameId: string) => {
+                if (gameId == subscriptionGameId) {
+                    emit.next(true);
+                }
+            };
+            ee.on('gameStartedUpdate', onGameStart);
+            return () => {
+                ee.off('gameStartedUpdate', onGameStart);
+            };
+        });
+    }),
+
+    move: t.procedure
+        .input(
+            z.object({
+                gameId: z.string(),
+                playerId: z.string(),
+                x1: z.number(),
+                y1: z.number(),
+                x2: z.number(),
+                y2: z.number(),
+            })
+        )
+        .mutation((req) => {
+            const { gameId, playerId, x1, y1, x2, y2 } = req.input;
+            const game = games.get(gameId);
+
+            if (!game) {
+                throw new Error(`No game found with id ${gameId}`);
+            }
+
+            if (!game.isStarted) {
+                throw new Error('Game has not started yet');
+            }
+
+            const isWhitePlayer = game.whitePlayerId === playerId;
+            const isBlackPlayer = game.blackPlayerId === playerId;
+
+            if (!isWhitePlayer && !isBlackPlayer) {
+                throw new Error('Player not found in this game');
+            }
+
+            if ((game.isWhiteTurn && !isWhitePlayer) || (!game.isWhiteTurn && !isBlackPlayer)) {
+                throw new Error('Not your turn');
+            }
+
+            const originTileIndex = x1 + y1 * game.board.width;
+            const originPiece = game.board.tiles[originTileIndex];
+
+            if (originPiece === '  ') {
+                throw new Error('No piece at origin position');
+            }
+
+            const pieceIsWhite = originPiece.includes('w');
+            const pieceIsBlack = originPiece.includes('b');
+
+            if ((isWhitePlayer && !pieceIsWhite) || (isBlackPlayer && !pieceIsBlack)) {
+                throw new Error("Cannot move opponent's piece");
+            }
+
+            const canPieceMoveTo = pieceMovementHandler.canPieceMoveTo(game.board, x1, y1, x2, y2);
+            if (!canPieceMoveTo) {
+                throw new Error('Invalid move');
+            }
+
+            const destinationPieceIndex = x2 + y2 * game.board.width;
+            game.board.tiles[destinationPieceIndex] = game.board.tiles[originTileIndex];
+            game.board.tiles[originTileIndex] = '  ';
+
+            game.isWhiteTurn = !game.isWhiteTurn;
+
+
+            console.log(
+                `Move made in game ${gameId}: ${originPiece} from (${x1},${y1}) to (${x2},${y2}). Next turn: ${
+                    game.isWhiteTurn ? 'White' : 'Black'
+                }`
+            );
+
+            ee.emit('boardUpdate', gameId);
+
+            return {
+                success: true,
+                isWhiteTurn: game.isWhiteTurn,
+                move: {
+                    from: { x: x1, y: y1 },
+                    to: { x: x2, y: y2 },
+                    piece: originPiece,
+                },
+            };
+        }),
+
+    getGameState: t.procedure.input(z.object({ gameId: z.string() })).query((req) => {
+        const game = games.get(req.input.gameId);
+        if (!game) {
+            throw new Error(`No game found with id ${req.input.gameId}`);
+        }
+        return {
+            isStarted: game.isStarted,
+            isWhiteTurn: game.isWhiteTurn,
+            whitePlayerId: game.whitePlayerId,
+            blackPlayerId: game.blackPlayerId,
+        };
+    }),
 });
