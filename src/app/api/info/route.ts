@@ -10,8 +10,8 @@ export async function GET(request: Request) {
     const domain = `${protocol}://${host}`;
 
     return NextResponse.json({
-        name: 'My App',
-        description: 'This is a simple Next.js app that returns info.',
+        name: 'Hidden queen chess',
+        description: 'I could not find this variant anywhere online so i created it myself',
         domain,
     });
 }
