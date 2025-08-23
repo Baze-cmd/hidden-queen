@@ -51,7 +51,7 @@ export default function GamePage() {
         enabled: !!playerId,
     });
 
-    const { data: newBoard, refetch: refetchBoard } =
+    const { data: gameState, refetch: refetchBoard } =
         trpc.games.getGameBoardStateForGameWithId.useQuery(
             !gameId || !playerId ? skipToken : { gameId, playerId },
             { enabled: !!gameId && !!playerId }
@@ -128,11 +128,12 @@ export default function GamePage() {
     }, [gameId, playerId, refetchIsWhite, fetchOpponentInfo]);
 
     useEffect(() => {
-        if (newBoard) {
-            setBoard(newBoard);
-            setOriginalBoard(newBoard);
+        if (gameState) {
+            setBoard(gameState.board);
+            setOriginalBoard(gameState.board);
+            setGameIsStarted(gameState.isStarted);
         }
-    }, [newBoard]);
+    }, [gameState]);
 
     const selectHiddenQueenMutation = trpc.games.selectHiddenQueen.useMutation();
     const makeMoveMutation = trpc.games.move.useMutation();

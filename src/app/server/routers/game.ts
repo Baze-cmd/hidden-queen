@@ -211,13 +211,16 @@ export const gamesRouter = t.router({
 
     getGameBoardStateForGameWithId: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string() }))
-        .query((req): Board => {
+        .query((req) => {
             const game = games.get(req.input.gameId);
             const playerId = req.input.playerId;
             if (!game) {
                 throw new Error(`No game found with id ${req.input.gameId}`);
             }
-            return maskHiddenQueen(game.board, playerId, game);
+            return {
+                board: maskHiddenQueen(game.board, playerId, game),
+                isStarted: game.isStarted,
+            };
         }),
 
     isWhite: t.procedure
@@ -405,7 +408,6 @@ export const gamesRouter = t.router({
 
             game.isWhiteTurn = !game.isWhiteTurn;
 
-
             console.log(
                 `Move made in game ${gameId}: ${originPiece} from (${x1},${y1}) to (${x2},${y2}). Next turn: ${
                     game.isWhiteTurn ? 'White' : 'Black'
@@ -424,17 +426,4 @@ export const gamesRouter = t.router({
                 },
             };
         }),
-
-    getGameState: t.procedure.input(z.object({ gameId: z.string() })).query((req) => {
-        const game = games.get(req.input.gameId);
-        if (!game) {
-            throw new Error(`No game found with id ${req.input.gameId}`);
-        }
-        return {
-            isStarted: game.isStarted,
-            isWhiteTurn: game.isWhiteTurn,
-            whitePlayerId: game.whitePlayerId,
-            blackPlayerId: game.blackPlayerId,
-        };
-    }),
 });
