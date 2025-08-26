@@ -1,9 +1,10 @@
 import { Board } from '@/types/Board';
 import styles from './BoardComponent.module.css';
+import Image from "next/image";
 
 export function BoardComponent(props: {
     board: Board;
-    whitePOV: boolean;
+    isWhite: boolean;
     onTileClick: (x: number, y: number) => void;
 }) {
     const fileMapping = new Map<string, string>([
@@ -45,7 +46,16 @@ export function BoardComponent(props: {
     function getChessPiece(piece: string) {
         if (!possibleTileValues.includes(piece)) return null;
         const src = fileMapping.get(piece);
-        return <img src={`/pieces/${src}`} alt={piece} className={styles.piece} />;
+
+        return (
+            <Image
+                src={`/pieces/${src}`}
+                alt={piece}
+                width={64}
+                height={64}
+                className={styles.piece}
+            />
+        );
     }
 
     return (
@@ -58,10 +68,10 @@ export function BoardComponent(props: {
         >
             {Array.from({ length: props.board.height }).map((_, rowIndex) =>
                 Array.from({ length: props.board.width }).map((_, colIndex) => {
-                    const displayRowIndex = props.whitePOV
+                    const displayRowIndex = props.isWhite
                         ? rowIndex
                         : props.board.height - 1 - rowIndex;
-                    const displayColIndex = props.whitePOV
+                    const displayColIndex = props.isWhite
                         ? colIndex
                         : props.board.width - 1 - colIndex;
 

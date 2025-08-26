@@ -1,9 +1,12 @@
 import { Board } from "./Board";
+import { Move } from "./Move"
 
 export type Game = {
     id: string;
     board: Board;
     isStarted: boolean;
+    isEnden: boolean;
+    winnerId: string | null;
     isPrivate: boolean;
     whitePlayerId: string | null;
     blackPlayerId: string | null;
@@ -11,5 +14,7 @@ export type Game = {
     blackTimeLeft: number;
     lastMovePlayedAtTime: number | null;
     isWhiteTurn: boolean;
-    moves: string[];
+    whiteHiddenRevealed: boolean,
+    blackHiddenRevealed: boolean,
+    moves: Move[];
 };

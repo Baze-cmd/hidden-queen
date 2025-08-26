@@ -1,5 +1,4 @@
 import { Game } from '@/types/Game';
-import { Player } from '@/types/Player';
 
 declare global {
     var __games: Map<string, Game> | undefined;

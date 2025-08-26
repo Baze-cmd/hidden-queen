@@ -20,7 +20,7 @@ export default function HiddenQueenPage() {
             }, 1000);
             return () => clearInterval(timer);
         }
-    }, [boardStates.length, isPlayerLoading, error]);
+    }, [isPlayerLoading, error]);
 
     const currentBoard = boardStates[currentBoardIndex];
 
@@ -84,7 +84,7 @@ export default function HiddenQueenPage() {
                             <CardContent className={styles.cardContent}>
                                 <BoardComponent
                                     board={currentBoard}
-                                    whitePOV={true}
+                                    isWhite={true}
                                     onTileClick={tileClick}
                                 />
                             </CardContent>

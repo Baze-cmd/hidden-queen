@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { BoardComponent } from '@/components/BoardComponent/BoardComponent';
 import styles from './page.module.css';
@@ -13,32 +13,36 @@ import { LoaderIcon } from 'lucide-react';
 import { trpc } from '@/app/utils/trpc';
 import { pieceMovementHandler } from '@/core/PieceMovement';
 import { skipToken } from '@tanstack/react-query';
+import { Game } from '@/types/Game';
 
 export default function GamePage() {
-    const gameTime = 300;
-    const gameTimeIncrement = 5;
+    const [me, setMyself] = useState<Player>();
+    const [opponent, setOpponent] = useState<Player>();
 
-    const [currentUserPlayer, setCurrentUserPlayer] = useState<Player>();
-    const [opponentPlayer, setOpponentPlayer] = useState<Player>();
-
-    const [currentUserTime, setCurrentUserTime] = useState<number>();
-    const [opponentTime, setOpponentTime] = useState<number>();
-
-    const [whitePOV, setWhitePOV] = useState<boolean>(true);
-    const [board, setBoard] = useState<Board>(InitBoard());
     const [originalBoard, setOriginalBoard] = useState<Board>(InitBoard());
-    const [message, setMessage] = useState<string>('');
-    const [opponentHasJoined, setOpponentHasJoined] = useState<boolean>(false);
 
-    const [gameIsStarted, setGameIsStarted] = useState<boolean>(false);
+    const [game, setGame] = useState<Game>();
+
+    const [localWhiteTime, setLocalWhiteTime] = useState<number>(300);
+    const [localBlackTime, setLocalBlackTime] = useState<number>(300);
+    const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
+    const timerRef = useRef<NodeJS.Timeout | null>(null);
 
     const [selectedPiece, setSelectedPiece] = useState<{ x: number; y: number } | null>(null);
-
-    const [isMakingMove, setIsMakingMove] = useState<boolean>(false);
 
     const params = useParams();
     const gameId = params.gameId as string;
     const { playerId, isLoading: isPlayerLoading } = usePlayer();
+
+    const { data: player } = trpc.getPlayerById.useQuery(playerId!, {
+        enabled: !!playerId,
+    });
+
+    useEffect(() => {
+        if (player) {
+            setMyself(player);
+        }
+    }, [player]);
 
     const { data: opponentInfo, refetch: fetchOpponentInfo } = trpc.games.getOpponentInfo.useQuery(
         { gameId, playerId: playerId! },
@@ -47,16 +51,6 @@ export default function GamePage() {
         }
     );
 
-    const { data: currentPlayerInfo } = trpc.getPlayerById.useQuery(playerId ?? skipToken, {
-        enabled: !!playerId,
-    });
-
-    const { data: gameState, refetch: refetchBoard } =
-        trpc.games.getGameBoardStateForGameWithId.useQuery(
-            !gameId || !playerId ? skipToken : { gameId, playerId },
-            { enabled: !!gameId && !!playerId }
-        );
-
     const { refetch: refetchIsWhite, data: isWhite } = trpc.games.isWhite.useQuery(
         !gameId || !playerId ? skipToken : { gameId, playerId },
         {
@@ -64,54 +58,82 @@ export default function GamePage() {
         }
     );
 
-    trpc.games.onBoardUpdate.useSubscription(
+    trpc.games.onGameUpdate.useSubscription(
         { gameId, playerId: playerId || '' },
         {
             enabled: !!gameId && !!playerId,
-            onData: (updatedBoard) => {
-                console.log('Board update received:', updatedBoard);
-                setBoard(updatedBoard);
-                setOriginalBoard(updatedBoard);
+            onData: (game) => {
+                setGame(game);
+                setOriginalBoard(game.board);
+
+                setLocalWhiteTime(game.whiteTimeLeft);
+                setLocalBlackTime(game.blackTimeLeft);
+                setLastUpdateTime(Date.now());
 
                 if (selectedPiece) {
                     setSelectedPiece(null);
                 }
-
-                setIsMakingMove(false);
             },
             onError: (err) => {
                 console.error('Subscription error:', err);
-                setMessage('Error: Could not subscribe to board updates.');
-                setIsMakingMove(false);
             },
         }
     );
 
-    useEffect(() => {
-        if (opponentHasJoined && isWhite !== undefined) {
-            setWhitePOV(isWhite);
-        }
-    }, [isWhite, opponentHasJoined]);
-
     trpc.games.opponentJoinedGame.useSubscription(gameId, {
         enabled: !!gameId,
         onData: () => {
-            setOpponentHasJoined(true);
             refetchIsWhite();
             fetchOpponentInfo();
         },
     });
 
-    trpc.games.gameStartedUpdate.useSubscription(gameId, {
-        enabled: !!gameId,
-        onData: () => {
-            setGameIsStarted(true);
-        },
-    });
+    useEffect(() => {
+        if (!game?.isStarted || game?.isEnden) {
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+            return;
+        }
+
+        timerRef.current = setInterval(() => {
+            const now = Date.now();
+            const elapsed = Math.floor((now - lastUpdateTime) / 1000);
+
+            if (game.isWhiteTurn) {
+                setLocalWhiteTime(() => Math.max(0, game.whiteTimeLeft - elapsed));
+            } else {
+                setLocalBlackTime(() => Math.max(0, game.blackTimeLeft - elapsed));
+            }
+        }, 100);
+
+        return () => {
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+                timerRef.current = null;
+            }
+        };
+    }, [
+        game?.isStarted,
+        game?.isEnden,
+        game?.isWhiteTurn,
+        game?.whiteTimeLeft,
+        game?.blackTimeLeft,
+        lastUpdateTime,
+    ]);
+
+    useEffect(() => {
+        return () => {
+            if (timerRef.current) {
+                clearInterval(timerRef.current);
+            }
+        };
+    }, []);
 
     useEffect(() => {
         if (opponentInfo) {
-            setOpponentPlayer({
+            setOpponent({
                 id: '',
                 name: opponentInfo.name,
                 rating: opponentInfo.rating,
@@ -121,19 +143,10 @@ export default function GamePage() {
 
     useEffect(() => {
         if (gameId && playerId) {
-            setOpponentHasJoined(true);
             refetchIsWhite();
             fetchOpponentInfo();
         }
     }, [gameId, playerId, refetchIsWhite, fetchOpponentInfo]);
-
-    useEffect(() => {
-        if (gameState) {
-            setBoard(gameState.board);
-            setOriginalBoard(gameState.board);
-            setGameIsStarted(gameState.isStarted);
-        }
-    }, [gameState]);
 
     const selectHiddenQueenMutation = trpc.games.selectHiddenQueen.useMutation();
     const makeMoveMutation = trpc.games.move.useMutation();
@@ -150,7 +163,7 @@ export default function GamePage() {
 
     const clearSelection = () => {
         setSelectedPiece(null);
-        setBoard({ ...originalBoard });
+        setGame((prev) => (prev ? { ...prev, board: { ...originalBoard } } : undefined));
     };
 
     const isMyPiece = (x: number, y: number): boolean => {
@@ -160,37 +173,31 @@ export default function GamePage() {
         const isWhitePlayer = Boolean(isWhite);
         const isWhitePiece = tile.includes('w');
         const isBlackPiece = tile.includes('b');
-
         return (isWhitePlayer && isWhitePiece) || (!isWhitePlayer && isBlackPiece);
     };
 
     const selectPiece = (x: number, y: number) => {
-        if (isMakingMove) return;
-
         if (!isMyPiece(x, y)) return;
-
-        const moves = pieceMovementHandler.getValidMoves(originalBoard, x, y);
+        const validMoves = pieceMovementHandler.getValidMoves(game!, x, y);
 
         const newBoard = { ...originalBoard };
         newBoard.tiles = [...originalBoard.tiles];
 
-        moves.forEach((move) => {
-            const index = move.y * newBoard.width + move.x;
+        validMoves.forEach((move) => {
+            const index = move.x + move.y * newBoard.width;
             newBoard.tiles[index] = 'ci';
         });
 
-        setBoard(newBoard);
+        setGame((prev) => (prev ? { ...prev, board: { ...newBoard } } : undefined));
         setSelectedPiece({ x, y });
     };
 
     const makeMove = async (toX: number, toY: number) => {
-        if (!selectedPiece || !gameId || !playerId || isMakingMove) return;
-
-        setIsMakingMove(true);
-
+        if (!selectedPiece || !gameId || !playerId) return;
+        if ((isWhite && !game?.isWhiteTurn) || (!isWhite && game?.isWhiteTurn)) {
+            return;
+        }
         try {
-            console.log('Making move:', selectedPiece, 'to', toX, toY);
-
             await makeMoveMutation.mutateAsync({
                 gameId,
                 playerId,
@@ -199,17 +206,8 @@ export default function GamePage() {
                 x2: toX,
                 y2: toY,
             });
-
-            setMessage('Move made successfully!');
         } catch (error: unknown) {
             console.error('Failed to make move:', error);
-            setIsMakingMove(false);
-
-            if (error instanceof Error) {
-                setMessage(`Error: ${error.message}`);
-            } else {
-                setMessage('An unknown error occurred.');
-            }
         }
     };
 
@@ -218,24 +216,14 @@ export default function GamePage() {
             return;
         }
         try {
-            const result = await selectHiddenQueenMutation.mutateAsync({
+            await selectHiddenQueenMutation.mutateAsync({
                 gameId,
                 playerId,
                 x,
                 y,
             });
-            if (result) {
-                setMessage('Hidden queen selected! Game starting...');
-            } else {
-                setMessage('Invalid move: You must select one of your pawns.');
-            }
         } catch (error: unknown) {
             console.error('Failed to select hidden queen:', error);
-            if (error instanceof Error) {
-                setMessage(`Error: ${error.message}`);
-            } else {
-                setMessage('An unknown error occurred.');
-            }
         }
 
         return;
@@ -243,23 +231,19 @@ export default function GamePage() {
 
     const handleTileClick = async (x: number, y: number) => {
         if (!gameId || !playerId) {
-            setMessage('Error: Game or player information missing.');
             return;
         }
 
-        if (isMakingMove) return;
+        const clickedTile = game!.board.tiles[y * game!.board.width + x];
+        console.log('Clicked tile:', clickedTile, 'at', x, y, 'Game started:', game?.isStarted);
 
-        const clickedTile = board.tiles[y * board.width + x];
-        console.log('Clicked tile:', clickedTile, 'at', x, y, 'Game started:', gameIsStarted);
-
-        if (!gameIsStarted) {
+        if (!game?.isStarted) {
             if (clickedTile === '  ') {
                 return;
             }
             await handleHiddenQueenSelection(x, y);
             return;
         }
-
         if (clickedTile === 'ci') {
             await makeMove(x, y);
         } else if (clickedTile === '  ') {
@@ -277,59 +261,27 @@ export default function GamePage() {
                 <div className={styles.col1}>
                     <Card className={styles.cardDark}>
                         <CardContent className={styles.playerSection}>
-                            {!opponentHasJoined && (
-                                <div
-                                    style={{
-                                        padding: '1rem',
-                                        backgroundColor: '#333',
-                                        borderRadius: '8px',
-                                        marginBottom: '1rem',
-                                        textAlign: 'center',
-                                    }}
-                                >
-                                    <p>{message}</p>
-                                    <div
-                                        style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            justifyContent: 'center',
-                                            gap: '0.5rem',
-                                            marginTop: '0.5rem',
-                                        }}
-                                    >
-                                        <LoaderIcon className="h-4 w-4 animate-spin" />
-                                        <span style={{ fontSize: '0.875rem', opacity: 0.7 }}>
-                                            Waiting for opponent...
-                                        </span>
-                                    </div>
-                                </div>
-                            )}
-
                             <div className={styles.playerCard}>
                                 <div className={styles.playerInfo}>
                                     <div className={styles.playerName}>
-                                        {opponentPlayer?.name || 'opponent'}
+                                        {opponent?.name || 'opponent'}
                                     </div>
                                     <div className={styles.playerRating}>
-                                        ({opponentPlayer?.rating || 0})
+                                        ({opponent?.rating || 0})
                                     </div>
                                 </div>
                                 <div className={styles.timeDisplay}>
-                                    {formatTime(opponentTime || gameTime)}
+                                    {formatTime(isWhite ? localBlackTime : localWhiteTime)}
                                 </div>
                             </div>
 
                             <div className={styles.playerCard}>
                                 <div className={styles.playerInfo}>
-                                    <div className={styles.playerName}>
-                                        {currentUserPlayer?.name || 'You'} (you)
-                                    </div>
-                                    <div className={styles.playerRating}>
-                                        ({currentUserPlayer?.rating || 0})
-                                    </div>
+                                    <div className={styles.playerName}>{me?.name} (you)</div>
+                                    <div className={styles.playerRating}>({me?.rating || 0})</div>
                                 </div>
                                 <div className={styles.timeDisplay}>
-                                    {formatTime(currentUserTime || gameTime)}
+                                    {formatTime(isWhite ? localWhiteTime : localBlackTime)}
                                 </div>
                             </div>
                         </CardContent>
@@ -339,8 +291,8 @@ export default function GamePage() {
                     <Card className={styles.cardDark}>
                         <CardContent className={styles.cardContent}>
                             <BoardComponent
-                                board={board}
-                                whitePOV={whitePOV}
+                                board={game?.board ?? originalBoard}
+                                isWhite={isWhite!}
                                 onTileClick={handleTileClick}
                             />
                         </CardContent>

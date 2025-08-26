@@ -9,7 +9,27 @@ import { observable } from '@trpc/server/observable';
 import { pieceMovementHandler } from '@/core/PieceMovement';
 
 const gameTime: number = 300; // 5 minutes
-const gameTimeIncrement: number = 50; // 5 seconds
+const gameTimeIncrement: number = 5; // 5 seconds
+
+function hidePlayerIdsFromGame(playerId: string, game: Game): Game {
+    return {
+        id: game.id,
+        board: maskHiddenQueen(playerId, game),
+        isStarted: game.isStarted,
+        isEnden: false,
+        winnerId: null,
+        isPrivate: game.isPrivate,
+        whitePlayerId: null,
+        blackPlayerId: null,
+        whiteTimeLeft: game.whiteTimeLeft,
+        blackTimeLeft: game.blackTimeLeft,
+        lastMovePlayedAtTime: game.lastMovePlayedAtTime,
+        isWhiteTurn: game.isWhiteTurn,
+        whiteHiddenRevealed: game.whiteHiddenRevealed,
+        blackHiddenRevealed: game.blackHiddenRevealed,
+        moves: game.moves,
+    };
+}
 
 function getPlayersInQueue() {
     const playersByPublicGameId: Map<string, { name: string; rating: number }> = new Map();
@@ -58,6 +78,8 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
         id: id,
         board: InitBoard(),
         isStarted: false,
+        isEnden: false,
+        winnerId: null,
         isPrivate: isPrivate,
         whitePlayerId: whitePlayerId,
         blackPlayerId: blackPlayerId,
@@ -65,6 +87,8 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
         blackTimeLeft: gameTime,
         lastMovePlayedAtTime: null,
         isWhiteTurn: true,
+        whiteHiddenRevealed: false,
+        blackHiddenRevealed: false,
         moves: [],
     };
 
@@ -76,18 +100,18 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
     return id;
 }
 
-function maskHiddenQueen(board: Board, playerId: string, game: Game): Board {
-    const tiles = board.tiles.map((tile) => {
-        if (tile === 'wH' && game.whitePlayerId !== playerId) {
+function maskHiddenQueen(playerId: string, game: Game): Board {
+    const tiles = game.board.tiles.map((tile) => {
+        if (tile === 'wH' && game.whitePlayerId !== playerId && !game.whiteHiddenRevealed) {
             return 'wP';
         }
-        if (tile === 'bH' && game.blackPlayerId !== playerId) {
+        if (tile === 'bH' && game.blackPlayerId !== playerId && !game.blackHiddenRevealed) {
             return 'bP';
         }
         return tile;
     });
 
-    return { ...board, tiles };
+    return { ...game.board, tiles };
 }
 
 export const gamesRouter = t.router({
@@ -133,7 +157,7 @@ export const gamesRouter = t.router({
             }
 
             ee.emit('queueUpdate');
-            ee.emit('boardUpdate', game.id);
+            ee.emit('GameUpdate', game.id);
             ee.emit('opponentJoinedGame', game.id);
 
             return true;
@@ -143,7 +167,7 @@ export const gamesRouter = t.router({
         for (const [gameId, game] of games.entries()) {
             if (game.whitePlayerId == req.input || game.blackPlayerId == req.input) {
                 games.delete(gameId);
-                ee.emit('boardUpdate', gameId);
+                ee.emit('GameUpdate', gameId);
                 break;
             }
         }
@@ -173,7 +197,7 @@ export const gamesRouter = t.router({
         });
     }),
 
-    onBoardUpdate: t.procedure
+    onGameUpdate: t.procedure
         .input(
             z.object({
                 gameId: z.string(),
@@ -183,28 +207,25 @@ export const gamesRouter = t.router({
         .subscription((req) => {
             const { gameId: subscriptionGameId, playerId } = req.input;
 
-            return observable<Board>((emit) => {
-                const onBoardUpdate = (gameId: string) => {
+            return observable<Game>((emit) => {
+                const onGameUpdate = (gameId: string) => {
                     if (gameId === subscriptionGameId) {
                         const game = games.get(gameId);
                         if (game) {
-                            console.log(
-                                `Emitting board update for game ${gameId} to player ${playerId}`
-                            );
-                            emit.next(maskHiddenQueen(game.board, playerId, game));
+                            emit.next(hidePlayerIdsFromGame(playerId, game));
                         }
                     }
                 };
 
-                ee.on('boardUpdate', onBoardUpdate);
+                ee.on('GameUpdate', onGameUpdate);
 
                 const game = games.get(subscriptionGameId);
                 if (game) {
-                    emit.next(maskHiddenQueen(game.board, playerId, game));
+                    emit.next(hidePlayerIdsFromGame(playerId, game));
                 }
 
                 return () => {
-                    ee.off('boardUpdate', onBoardUpdate);
+                    ee.off('GameUpdate', onGameUpdate);
                 };
             });
         }),
@@ -218,7 +239,7 @@ export const gamesRouter = t.router({
                 throw new Error(`No game found with id ${req.input.gameId}`);
             }
             return {
-                board: maskHiddenQueen(game.board, playerId, game),
+                board: maskHiddenQueen(playerId, game),
                 isStarted: game.isStarted,
             };
         }),
@@ -255,6 +276,7 @@ export const gamesRouter = t.router({
             if (player) {
                 return { name: player.name, rating: player.rating };
             }
+            return null;
         }),
 
     selectHiddenQueen: t.procedure
@@ -311,10 +333,10 @@ export const gamesRouter = t.router({
             if (numHiddenQueens == 2) {
                 game.isStarted = true;
                 game.isWhiteTurn = true;
-                ee.emit('gameStartedUpdate', gameId);
+                game.lastMovePlayedAtTime = Date.now();
             }
 
-            ee.emit('boardUpdate', gameId);
+            ee.emit('GameUpdate', gameId);
 
             return game.isStarted;
         }),
@@ -334,21 +356,6 @@ export const gamesRouter = t.router({
         });
     }),
 
-    gameStartedUpdate: t.procedure.input(z.string()).subscription((req) => {
-        const subscriptionGameId = req.input;
-        return observable<boolean>((emit) => {
-            const onGameStart = (gameId: string) => {
-                if (gameId == subscriptionGameId) {
-                    emit.next(true);
-                }
-            };
-            ee.on('gameStartedUpdate', onGameStart);
-            return () => {
-                ee.off('gameStartedUpdate', onGameStart);
-            };
-        });
-    }),
-
     move: t.procedure
         .input(
             z.object({
@@ -363,6 +370,7 @@ export const gamesRouter = t.router({
         .mutation((req) => {
             const { gameId, playerId, x1, y1, x2, y2 } = req.input;
             const game = games.get(gameId);
+            const currentTime = Date.now();
 
             if (!game) {
                 throw new Error(`No game found with id ${gameId}`);
@@ -370,6 +378,10 @@ export const gamesRouter = t.router({
 
             if (!game.isStarted) {
                 throw new Error('Game has not started yet');
+            }
+
+            if (game.isEnden) {
+                throw new Error('Game ended');
             }
 
             const isWhitePlayer = game.whitePlayerId === playerId;
@@ -383,47 +395,102 @@ export const gamesRouter = t.router({
                 throw new Error('Not your turn');
             }
 
-            const originTileIndex = x1 + y1 * game.board.width;
-            const originPiece = game.board.tiles[originTileIndex];
+            // Update time for the current player
+            if (game.lastMovePlayedAtTime !== null) {
+                const timeElapsed = Math.floor((currentTime - game.lastMovePlayedAtTime) / 1000); // Convert to seconds
 
-            if (originPiece === '  ') {
+                if (game.isWhiteTurn) {
+                    game.whiteTimeLeft = Math.max(0, game.whiteTimeLeft - timeElapsed);
+                    game.whiteTimeLeft += gameTimeIncrement;
+                    // Check if white player ran out of time
+                    if (game.whiteTimeLeft <= 0) {
+                        game.isEnden = true;
+                        game.winnerId = game.blackPlayerId;
+                        ee.emit('GameUpdate', gameId);
+                        throw new Error('Time expired - Black wins!');
+                    }
+                } else {
+                    game.blackTimeLeft = Math.max(0, game.blackTimeLeft - timeElapsed);
+                    game.blackTimeLeft += gameTimeIncrement;
+                    // Check if black player ran out of time
+                    if (game.blackTimeLeft <= 0) {
+                        game.isEnden = true;
+                        game.winnerId = game.whitePlayerId;
+                        ee.emit('GameUpdate', gameId);
+                        throw new Error('Time expired - White wins!');
+                    }
+                }
+            }
+
+            const originTileIndex = x1 + y1 * game.board.width;
+            const originTile = game.board.tiles[originTileIndex];
+            const destinationPieceIndex = x2 + y2 * game.board.width;
+            const destinationTile = game.board.tiles[destinationPieceIndex];
+
+            if (originTile === '  ') {
                 throw new Error('No piece at origin position');
             }
 
-            const pieceIsWhite = originPiece.includes('w');
-            const pieceIsBlack = originPiece.includes('b');
+            const pieceIsWhite = originTile.includes('w');
+            const pieceIsBlack = originTile.includes('b');
 
             if ((isWhitePlayer && !pieceIsWhite) || (isBlackPlayer && !pieceIsBlack)) {
                 throw new Error("Cannot move opponent's piece");
             }
 
-            const canPieceMoveTo = pieceMovementHandler.canPieceMoveTo(game.board, x1, y1, x2, y2);
+            const canPieceMoveTo = pieceMovementHandler.canPieceMoveTo(game, x1, y1, x2, y2);
+
             if (!canPieceMoveTo) {
                 throw new Error('Invalid move');
             }
 
-            const destinationPieceIndex = x2 + y2 * game.board.width;
+            // Execute the move
             game.board.tiles[destinationPieceIndex] = game.board.tiles[originTileIndex];
             game.board.tiles[originTileIndex] = '  ';
+            game.moves.push({ piece: originTile, fromX: x1, fromY: y1, toX: x2, toY: y2 });
 
+            // Handle castling - rook moves
+            if (originTile == 'wK') {
+                if (x2 == 6 && y2 == 7) {
+                    game.board.tiles[7 + 7 * game.board.width] = '  ';
+                    game.board.tiles[5 + 7 * game.board.width] = 'wR';
+                } else if (x2 == 2 && y2 == 7) {
+                    game.board.tiles[0 + 7 * game.board.width] = '  ';
+                    game.board.tiles[3 + 7 * game.board.width] = 'wR';
+                }
+            } else if (originTile == 'bK') {
+                if (x2 == 6 && y2 == 0) {
+                    game.board.tiles[7 + 0 * game.board.width] = '  ';
+                    game.board.tiles[5 + 0 * game.board.width] = 'bR';
+                } else if (x2 == 2 && y2 == 0) {
+                    game.board.tiles[0 + 0 * game.board.width] = '  ';
+                    game.board.tiles[3 + 0 * game.board.width] = 'bR';
+                }
+            }
+
+            // Handle en passant
+            if (originTile == 'wP' && y1 == 3 && y1 != y2 && destinationTile == '  ') {
+                game.board.tiles[destinationPieceIndex + game.board.width] = '  ';
+            }
+            if (originTile == 'bP' && y1 == 4 && y1 != y2 && destinationTile == '  ') {
+                game.board.tiles[destinationPieceIndex - game.board.width] = '  ';
+            }
+
+            // Check for game-ending captures
+            if (destinationTile == 'wK') {
+                game.isEnden = true;
+                game.winnerId = game.blackPlayerId;
+            } else if (destinationTile == 'bK') {
+                game.isEnden = true;
+                game.winnerId = game.whitePlayerId;
+            }
+
+            // Switch turns and update last move time
             game.isWhiteTurn = !game.isWhiteTurn;
+            game.lastMovePlayedAtTime = currentTime;
 
-            console.log(
-                `Move made in game ${gameId}: ${originPiece} from (${x1},${y1}) to (${x2},${y2}). Next turn: ${
-                    game.isWhiteTurn ? 'White' : 'Black'
-                }`
-            );
+            ee.emit('GameUpdate', gameId);
 
-            ee.emit('boardUpdate', gameId);
-
-            return {
-                success: true,
-                isWhiteTurn: game.isWhiteTurn,
-                move: {
-                    from: { x: x1, y: y1 },
-                    to: { x: x2, y: y2 },
-                    piece: originPiece,
-                },
-            };
+            return true;
         }),
 });
