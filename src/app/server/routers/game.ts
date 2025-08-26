@@ -476,6 +476,13 @@ export const gamesRouter = t.router({
                 game.board.tiles[destinationPieceIndex - game.board.width] = '  ';
             }
 
+            //auto promote to a queen
+            if(originTile == 'wP' && y2 == 0){
+                game.board.tiles[destinationPieceIndex] = 'wQ';
+            }else if(originTile == 'bP' && y2 == 7){
+                game.board.tiles[destinationPieceIndex] = 'bQ';
+            }
+
             // Check for game-ending captures
             if (destinationTile == 'wK') {
                 game.isEnden = true;

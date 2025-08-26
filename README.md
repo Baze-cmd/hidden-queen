@@ -13,6 +13,5 @@
     - Ability to spectate live games
     - "Give opponent time" option
     - Captureing with en passant with your hidden queen should not reveal it
-    - Implement pawn promotion
     - Bo{N} matches
     
