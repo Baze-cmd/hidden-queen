@@ -2,7 +2,6 @@
     TODO:
     - Add dynamic cursor movement making the moves on front page
     - Add in memory db (redis) instead of saving on server
-    - Reveal opponent queen when it moves like a queen
     - Change name option
     - Propper auth instead of just uuids
     - Add matching vs llms because ofcourse it has to have AI
@@ -12,6 +11,6 @@
     - Hide game id from page and add invite/join game button
     - Ability to spectate live games
     - "Give opponent time" option
-    - Captureing with en passant with your hidden queen should not reveal it
     - Bo{N} matches
+    - Add option for a player to chose what to promote to
     

@@ -11,12 +11,37 @@ import { pieceMovementHandler } from '@/core/PieceMovement';
 const gameTime: number = 300; // 5 minutes
 const gameTimeIncrement: number = 5; // 5 seconds
 
+function hasMovedLikeAPawn(
+    originTile: string,
+    destinationTile: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number
+): boolean {
+    if (originTile == 'wH') {
+        if (x1 == x2 && y1 == 6 && y2 == 4 && destinationTile == '  ') return true; //initial pawn move
+        if (x1 == x2 && y1 == y2 + 1 && destinationTile == '  ') return true; //any single forward pawn like move
+        if (destinationTile != '  ' && Math.abs(x2 - x1) == 1 && Math.abs(y2 - y1) == 1 && y1 > y2)
+            //pawn capture
+            return true;
+    } else if (originTile == 'bH') {
+        if (x1 == x2 && y1 == 1 && destinationTile == '  ' && y2 == 3) return true; //initial pawn move
+        if (x1 == x2 && y1 == y2 - 1 && destinationTile == '  ') return true; //any single forward pawn like move
+        if (destinationTile != '  ' && Math.abs(x2 - x1) == 1 && Math.abs(y2 - y1) == 1 && y1 < y2)
+            //pawn capture
+            return true;
+    }
+
+    return false;
+}
+
 function hidePlayerIdsFromGame(playerId: string, game: Game): Game {
     return {
         id: game.id,
         board: maskHiddenQueen(playerId, game),
         isStarted: game.isStarted,
-        isEnden: false,
+        isEnded: false,
         winnerId: null,
         isPrivate: game.isPrivate,
         whitePlayerId: null,
@@ -78,7 +103,7 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
         id: id,
         board: InitBoard(),
         isStarted: false,
-        isEnden: false,
+        isEnded: false,
         winnerId: null,
         isPrivate: isPrivate,
         whitePlayerId: whitePlayerId,
@@ -380,7 +405,7 @@ export const gamesRouter = t.router({
                 throw new Error('Game has not started yet');
             }
 
-            if (game.isEnden) {
+            if (game.isEnded) {
                 throw new Error('Game ended');
             }
 
@@ -401,24 +426,26 @@ export const gamesRouter = t.router({
 
                 if (game.isWhiteTurn) {
                     game.whiteTimeLeft = Math.max(0, game.whiteTimeLeft - timeElapsed);
-                    game.whiteTimeLeft += gameTimeIncrement;
+
                     // Check if white player ran out of time
                     if (game.whiteTimeLeft <= 0) {
-                        game.isEnden = true;
+                        game.isEnded = true;
                         game.winnerId = game.blackPlayerId;
                         ee.emit('GameUpdate', gameId);
                         throw new Error('Time expired - Black wins!');
                     }
+                    game.whiteTimeLeft += gameTimeIncrement;
                 } else {
                     game.blackTimeLeft = Math.max(0, game.blackTimeLeft - timeElapsed);
-                    game.blackTimeLeft += gameTimeIncrement;
+
                     // Check if black player ran out of time
                     if (game.blackTimeLeft <= 0) {
-                        game.isEnden = true;
+                        game.isEnded = true;
                         game.winnerId = game.whitePlayerId;
                         ee.emit('GameUpdate', gameId);
                         throw new Error('Time expired - White wins!');
                     }
+                    game.blackTimeLeft += gameTimeIncrement;
                 }
             }
 
@@ -471,25 +498,40 @@ export const gamesRouter = t.router({
             // Handle en passant
             if (originTile == 'wP' && y1 == 3 && y1 != y2 && destinationTile == '  ') {
                 game.board.tiles[destinationPieceIndex + game.board.width] = '  ';
-            }
-            if (originTile == 'bP' && y1 == 4 && y1 != y2 && destinationTile == '  ') {
+            } else if (originTile == 'bP' && y1 == 4 && y1 != y2 && destinationTile == '  ') {
                 game.board.tiles[destinationPieceIndex - game.board.width] = '  ';
             }
 
-            //auto promote to a queen
-            if(originTile == 'wP' && y2 == 0){
+            // Auto promote to a queen
+            if (originTile == 'wP' && y2 == 0) {
                 game.board.tiles[destinationPieceIndex] = 'wQ';
-            }else if(originTile == 'bP' && y2 == 7){
+            } else if (originTile == 'bP' && y2 == 7) {
                 game.board.tiles[destinationPieceIndex] = 'bQ';
+            }
+
+            // Reveal queens if they have arived to the end of the board
+            if (originTile == 'wH' && y2 == 0) {
+                game.whiteHiddenRevealed = true;
+            } else if (originTile == 'bH' && y2 == 7) {
+                game.blackHiddenRevealed = true;
             }
 
             // Check for game-ending captures
             if (destinationTile == 'wK') {
-                game.isEnden = true;
+                game.isEnded = true;
                 game.winnerId = game.blackPlayerId;
             } else if (destinationTile == 'bK') {
-                game.isEnden = true;
+                game.isEnded = true;
                 game.winnerId = game.whitePlayerId;
+            }
+
+            //check if we should reveal
+            const movedLikeAPawn = hasMovedLikeAPawn(originTile, destinationTile, x1, y1, x2, y2);
+            if (originTile == 'wH' && !movedLikeAPawn) {
+                game.whiteHiddenRevealed = true;
+            }
+            if (originTile == 'bH' && !movedLikeAPawn) {
+                game.blackHiddenRevealed = true;
             }
 
             // Switch turns and update last move time

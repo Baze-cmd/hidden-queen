@@ -13,9 +13,5 @@ services:
       start_period: 30s
     environment:
       NODE_ENV: production 
-      MONITOR_LABEL: "${MONITOR_LABEL}"
-      SERVICE_NAME: "${SERVICE_NAME}"
-      SERVICE_DESCRIPTION: "${SERVICE_DESCRIPTION}"
-      SERVICE_TYPE: "${SERVICE_TYPE}"
-      SERVICE_DOMAIN: "${SERVICE_DOMAIN}"
     restart: unless-stopped
+

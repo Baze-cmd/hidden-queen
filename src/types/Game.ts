@@ -5,7 +5,7 @@ export type Game = {
     id: string;
     board: Board;
     isStarted: boolean;
-    isEnden: boolean;
+    isEnded: boolean;
     winnerId: string | null;
     isPrivate: boolean;
     whitePlayerId: string | null;

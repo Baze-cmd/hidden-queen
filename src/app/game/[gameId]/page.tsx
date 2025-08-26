@@ -89,7 +89,7 @@ export default function GamePage() {
     });
 
     useEffect(() => {
-        if (!game?.isStarted || game?.isEnden) {
+        if (!game?.isStarted || game?.isEnded) {
             if (timerRef.current) {
                 clearInterval(timerRef.current);
                 timerRef.current = null;
@@ -116,7 +116,7 @@ export default function GamePage() {
         };
     }, [
         game?.isStarted,
-        game?.isEnden,
+        game?.isEnded,
         game?.isWhiteTurn,
         game?.whiteTimeLeft,
         game?.blackTimeLeft,
