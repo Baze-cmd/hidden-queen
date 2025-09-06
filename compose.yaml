@@ -18,7 +18,7 @@ services:
       start_period: 30s
     environment:
       NODE_ENV: production
-      REDIS_URL: ${REDIS_URL:-redis://redis-hidden-queen:6380}
+      REDIS_URL: ${REDIS_URL:-redis://redis-hidden-queen:6379}
     restart: unless-stopped
     networks:
       - hidden-queen-network
