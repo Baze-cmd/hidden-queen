@@ -56,10 +56,10 @@ function hidePlayerIdsFromGame(playerId: string, game: Game): Game {
     };
 }
 
-function getPlayersInQueue() {
+async function getPlayersInQueue() {
     const playersByPublicGameId: Map<string, { name: string; rating: number }> = new Map();
 
-    for (const [gameId, game] of games.entries()) {
+    for (const [gameId, game] of await games.entries()) {
         if (game.isPrivate) continue;
 
         let numOfPlayers = 0;
@@ -75,7 +75,7 @@ function getPlayersInQueue() {
         }
 
         if (singlePlayerId) {
-            const player = allPlayers.get(singlePlayerId);
+            const player = await allPlayers.get(singlePlayerId);
             if (player) {
                 playersByPublicGameId.set(gameId, { name: player.name, rating: player.rating });
             }
@@ -85,15 +85,15 @@ function getPlayersInQueue() {
     return Array.from(playersByPublicGameId.entries());
 }
 
-function createGame(isPrivate: boolean, playerId: string): string | null {
-    if (isInQueue.has(playerId)) {
+async function createGame(isPrivate: boolean, playerId: string): Promise<string | null> {
+    if (await isInQueue.has(playerId)) {
         return null;
     }
 
     let id: string;
     do {
         id = crypto.randomUUID();
-    } while (games.has(id));
+    } while (await games.has(id));
 
     const coinFlip = Math.random() < 0.5;
     const whitePlayerId = coinFlip ? playerId : null;
@@ -117,8 +117,8 @@ function createGame(isPrivate: boolean, playerId: string): string | null {
         moves: [],
     };
 
-    games.set(id, game);
-    isInQueue.add(playerId);
+    await games.set(id, game);
+    await isInQueue.add(playerId);
 
     ee.emit('queueUpdate');
 
@@ -140,18 +140,23 @@ function maskHiddenQueen(playerId: string, game: Game): Board {
 }
 
 export const gamesRouter = t.router({
-    createPrivateGame: t.procedure.input(z.string()).mutation((req): string | null => {
-        return createGame(true, req.input);
-    }),
+    createPrivateGame: t.procedure
+        .input(z.string())
+        .mutation(async (req): Promise<string | null> => {
+            return await createGame(true, req.input);
+        }),
 
-    createPublicGame: t.procedure.input(z.string()).mutation((req): string | null => {
-        return createGame(false, req.input);
-    }),
+    createPublicGame: t.procedure
+        .input(z.string())
+        .mutation(async (req): Promise<string | null> => {
+            return await createGame(false, req.input);
+        }),
 
     joinGame: t.procedure
         .input(z.object({ playerId: z.string(), gameId: z.string() }))
-        .mutation((req): boolean => {
-            const game = games.get(req.input.gameId);
+        .mutation(async (req): Promise<boolean> => {
+            const gameId = req.input.gameId;
+            const game = await games.get(gameId);
             if (!game) {
                 return false;
             }
@@ -161,7 +166,7 @@ export const gamesRouter = t.router({
             ) {
                 return false;
             }
-            const player = allPlayers.get(req.input.playerId);
+            const player = await allPlayers.get(req.input.playerId);
             if (!player) {
                 return false;
             }
@@ -175,11 +180,13 @@ export const gamesRouter = t.router({
             }
 
             if (game.whitePlayerId) {
-                isInQueue.delete(game.whitePlayerId);
+                await isInQueue.delete(game.whitePlayerId);
             }
             if (game.blackPlayerId) {
-                isInQueue.delete(game.blackPlayerId);
+                await isInQueue.delete(game.blackPlayerId);
             }
+
+            await games.set(gameId, game);
 
             ee.emit('queueUpdate');
             ee.emit('GameUpdate', game.id);
@@ -188,29 +195,34 @@ export const gamesRouter = t.router({
             return true;
         }),
 
-    leaveGame: t.procedure.input(z.string()).mutation((req): boolean => {
-        for (const [gameId, game] of games.entries()) {
+    leaveGame: t.procedure.input(z.string()).mutation(async (req): Promise<boolean> => {
+        for (const [gameId, game] of await games.entries()) {
             if (game.whitePlayerId == req.input || game.blackPlayerId == req.input) {
-                games.delete(gameId);
+                await games.delete(gameId);
                 ee.emit('GameUpdate', gameId);
                 break;
             }
         }
-        isInQueue.delete(req.input);
+        await isInQueue.delete(req.input);
 
         ee.emit('queueUpdate');
 
         return true;
     }),
 
-    isInQueue: t.procedure.input(z.string()).query((req): boolean => {
-        return isInQueue.has(req.input);
+    isInQueue: t.procedure.input(z.string()).query(async (req): Promise<boolean> => {
+        return await isInQueue.has(req.input);
     }),
 
     getPlayersInPublicQueue: t.procedure.subscription(() => {
-        return observable<ReturnType<typeof getPlayersInQueue>>((emit) => {
-            const onQueueUpdate = () => {
-                emit.next(getPlayersInQueue());
+        return observable<[string, { name: string; rating: number }][]>((emit) => {
+            const onQueueUpdate = async () => {
+                try {
+                    emit.next(await getPlayersInQueue());
+                } catch (error) {
+                    console.log('Error fetching players in queue:', error);
+                    emit.error(error);
+                }
             };
             ee.on('queueUpdate', onQueueUpdate);
 
@@ -233,21 +245,34 @@ export const gamesRouter = t.router({
             const { gameId: subscriptionGameId, playerId } = req.input;
 
             return observable<Game>((emit) => {
-                const onGameUpdate = (gameId: string) => {
+                const onGameUpdate = async (gameId: string) => {
                     if (gameId === subscriptionGameId) {
-                        const game = games.get(gameId);
-                        if (game) {
-                            emit.next(hidePlayerIdsFromGame(playerId, game));
+                        try {
+                            const game = await games.get(gameId);
+                            if (game) {
+                                emit.next(hidePlayerIdsFromGame(playerId, game));
+                            }
+                        } catch (error) {
+                            console.log('Error fetching game in subscription', error);
+                            emit.error(error);
                         }
                     }
                 };
 
                 ee.on('GameUpdate', onGameUpdate);
 
-                const game = games.get(subscriptionGameId);
-                if (game) {
-                    emit.next(hidePlayerIdsFromGame(playerId, game));
-                }
+                const fetchInitialGame = async () => {
+                    try {
+                        const game = await games.get(subscriptionGameId);
+                        if (game) {
+                            emit.next(hidePlayerIdsFromGame(playerId, game));
+                        }
+                    } catch (error) {
+                        console.log('Error fetching initial game state', error);
+                        emit.error(error);
+                    }
+                };
+                fetchInitialGame();
 
                 return () => {
                     ee.off('GameUpdate', onGameUpdate);
@@ -257,8 +282,8 @@ export const gamesRouter = t.router({
 
     getGameBoardStateForGameWithId: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string() }))
-        .query((req) => {
-            const game = games.get(req.input.gameId);
+        .query(async (req) => {
+            const game = await games.get(req.input.gameId);
             const playerId = req.input.playerId;
             if (!game) {
                 throw new Error(`No game found with id ${req.input.gameId}`);
@@ -271,8 +296,8 @@ export const gamesRouter = t.router({
 
     isWhite: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string() }))
-        .query((req): boolean => {
-            const game = games.get(req.input.gameId);
+        .query(async (req): Promise<boolean> => {
+            const game = await games.get(req.input.gameId);
             if (!game) {
                 throw new Error(`No game found with id ${req.input.gameId}`);
             }
@@ -281,10 +306,10 @@ export const gamesRouter = t.router({
 
     getOpponentInfo: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string() }))
-        .query((req) => {
+        .query(async (req) => {
             const gameId = req.input.gameId;
             const playerId = req.input.playerId;
-            const game = games.get(gameId);
+            const game = await games.get(gameId);
             if (!game) {
                 throw new Error(`No game found with id ${gameId}`);
             }
@@ -292,9 +317,9 @@ export const gamesRouter = t.router({
             const blackPlayerId = game.blackPlayerId;
             let player = null;
             if (whitePlayerId == playerId) {
-                player = allPlayers.get(blackPlayerId!);
+                player = await allPlayers.get(blackPlayerId!);
             } else if (blackPlayerId == playerId) {
-                player = allPlayers.get(whitePlayerId!);
+                player = await allPlayers.get(whitePlayerId!);
             } else {
                 throw new Error('No opponent found');
             }
@@ -306,9 +331,9 @@ export const gamesRouter = t.router({
 
     selectHiddenQueen: t.procedure
         .input(z.object({ gameId: z.string(), playerId: z.string(), x: z.number(), y: z.number() }))
-        .mutation((req): boolean => {
+        .mutation(async (req): Promise<boolean> => {
             const { gameId, playerId, x, y } = req.input;
-            const game = games.get(gameId);
+            const game = await games.get(gameId);
             if (!game) {
                 throw new Error(`No game found with id ${gameId}`);
             }
@@ -361,6 +386,8 @@ export const gamesRouter = t.router({
                 game.lastMovePlayedAtTime = Date.now();
             }
 
+            await games.set(gameId, game);
+
             ee.emit('GameUpdate', gameId);
 
             return game.isStarted;
@@ -392,9 +419,9 @@ export const gamesRouter = t.router({
                 y2: z.number(),
             })
         )
-        .mutation((req) => {
+        .mutation(async (req) => {
             const { gameId, playerId, x1, y1, x2, y2 } = req.input;
-            const game = games.get(gameId);
+            const game = await games.get(gameId);
             const currentTime = Date.now();
 
             if (!game) {
@@ -537,6 +564,8 @@ export const gamesRouter = t.router({
             // Switch turns and update last move time
             game.isWhiteTurn = !game.isWhiteTurn;
             game.lastMovePlayedAtTime = currentTime;
+
+            await games.set(gameId, game);
 
             ee.emit('GameUpdate', gameId);
 
